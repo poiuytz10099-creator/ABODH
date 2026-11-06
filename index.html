@@ -15,8 +15,9 @@ body{
   color:var(--text); min-height:100vh; line-height:1.6;
   padding-bottom:env(safe-area-inset-bottom);
   -webkit-user-select:none; user-select:none;
-  /* خلفية متدرجة مريحة للعين */
-  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8eb 100%);
+  /* الخلفية الجديدة مع القهوة */
+  background: linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)), url('https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?q=80&w=1080&auto=format&fit=crop') no-repeat center center fixed;
+  background-size: cover;
 }
 .container{max-width:900px;margin:0 auto;padding:16px}
 header{background:var(--primary);color:#fff;padding:16px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.1);padding-top:calc(16px + env(safe-area-inset-top))}
@@ -144,7 +145,7 @@ import { getDatabase, ref, onValue, set, get } from "https://www.gstatic.com/fir
 /* ============ Firebase Config ============ */
 const FB_KEY = 'pager_fb_cfg_v1';
 const IS_FILE = location.protocol === 'file:';
-const DB_KEY = 'pager_db_v7';
+const DB_KEY = 'pager_db_v8'; // Updated version
 
 function readUrlConfig() { try { const p = new URLSearchParams(location.search).get('cfg'); if (!p) return null; const parsed = JSON.parse(decodeURIComponent(atob(p))); if (parsed && parsed.apiKey && parsed.databaseURL) { localStorage.setItem(FB_KEY, JSON.stringify(parsed)); return parsed; } } catch (e) {} return null; }
 function readStoredConfig() { try { const s = localStorage.getItem(FB_KEY); return s ? JSON.parse(s) : null; } catch { return null; } }
@@ -159,7 +160,7 @@ const startConfig = readUrlConfig() || readStoredConfig();
 initFirebase(startConfig);
 
 /* ============ Data Layer ============ */
-function defaultDB() { return { queue: [], history: [], nextNumber: 1, currentNumber: 0, storeName: '', avgServiceTime: 5, settings: { soundEnabled: true, language: 'ar', theme: 'light' }, lastUpdated: Date.now() }; }
+function defaultDB() { return { queue: [], history: [], nextNumber: 1, currentNumber: 0, storeName: '', settings: { soundEnabled: true, language: 'ar' }, lastUpdated: Date.now() }; }
 function normalizeDB(data) {
   if (!data || typeof data !== 'object') return defaultDB();
   const normalized = { ...data };
@@ -186,7 +187,7 @@ async function saveDB(data) {
   const normalized = normalizeDB(data);
   if (FIREBASE_ENABLED) {
     try {
-      await set(rootRef, { queue: normalized.queue, history: normalized.history, nextNumber: normalized.nextNumber, currentNumber: normalized.currentNumber, storeName: normalized.storeName, avgServiceTime: normalized.avgServiceTime });
+      await set(rootRef, { queue: normalized.queue, history: normalized.history, nextNumber: normalized.nextNumber, currentNumber: normalized.currentNumber, storeName: normalized.storeName });
     } catch (error) { saveLocal(normalized); throw error; }
   } else { saveLocal(normalized); }
 }
@@ -237,7 +238,6 @@ function stopAlarm() {
   if (alarmInterval) { clearInterval(alarmInterval); alarmInterval = null; } 
   const inlineBtn = document.getElementById('inlineStopBtn');
   if (inlineBtn) { inlineBtn.style.display = 'none'; document.getElementById('alarmStoppedMsg').style.display = 'block'; }
-  // For waiting screen button
   const floatBtn = document.getElementById('stopAlarmBtn');
   if (floatBtn) floatBtn.style.display = 'none';
 }
@@ -408,7 +408,7 @@ async function refreshCustomer() {
   
   if (me.status === 'serving') {
     if (header) header.style.display = 'none'; 
-    const fixedBtn = document.getElementById('stopAlarmBtn'); if(fixedBtn) fixedBtn.style.display = 'none'; // hide fixed button
+    const fixedBtn = document.getElementById('stopAlarmBtn'); if(fixedBtn) fixedBtn.style.display = 'none'; 
     
     if (lastNotifiedState !== 'serving') { 
         startAlarm(); 
@@ -423,7 +423,6 @@ async function refreshCustomer() {
           <h1 class="serving-title">حان دورك الآن!</h1>
           <div class="serving-number">${me.number}</div>
           <p class="serving-desc">يرجى التوجه لنقطة الخدمة</p>
-          
           <button id="inlineStopBtn" onclick="window.stopAlarm()" class="serving-stop-btn">
             <span>🛑</span>
             <span>إيقاف التنبيه</span>
@@ -435,9 +434,27 @@ async function refreshCustomer() {
   }
   
   if (header) header.style.display = 'block'; if (lastNotifiedState === 'serving') lastNotifiedState = null;
+  
   const waiting = queue.filter(c => c.status === 'waiting').sort((a,b) => a.number - b.number);
-  const position = waiting.findIndex(c => c.id === me.id); const ahead = position >= 0 ? position : waiting.length;
+  const position = waiting.findIndex(c => c.id === me.id); 
+  const ahead = position >= 0 ? position : waiting.length;
   const current = db.currentNumber || 0;
+  
+  // ======= حساب الوقت التقديري الذكي =======
+  let avgMins = 5; // الافتراضي
+  const doneHistory = (db.history || []).filter(h => h.status === 'done' && h.servedAt && h.completedAt);
+  if (doneHistory.length > 0) {
+      // نأخذ آخر 20 طلب تم إنهاؤهم لحساب المعدل الحقيقي
+      const recent = doneHistory.slice(-20);
+      const totalTime = recent.reduce((sum, h) => sum + (h.completedAt - h.createdAt), 0);
+      avgMins = (totalTime / recent.length) / 60000;
+      if (avgMins <= 0 || isNaN(avgMins)) avgMins = 5;
+      if (avgMins < 1) avgMins = 1; // حد أدنى دقيقة
+      if (avgMins > 30) avgMins = 30; // حد أقصى 30 دقيقة
+  }
+  const estMin = Math.round(ahead * avgMins);
+  // ======================================
+
   if (ahead <= 1 && ahead >= 0 && lastNotifiedState !== 'near') { showNotification('⏰ اقترب دورك', `رقمك ${me.number}`); lastNotifiedState = 'near'; } else if (ahead > 2) { lastNotifiedState = null; }
   
   const needPerm = 'Notification' in window && Notification.permission !== 'granted';
@@ -445,15 +462,25 @@ async function refreshCustomer() {
   content.innerHTML = `
     <div class="welcome-banner"><h2>👋 أهلاً بك في ${esc(db.storeName || 'البيجر')}</h2><p>تم تسجيل دورك بنجاح.</p></div>
     ${needPerm ? `<div class="setup-warning">🔕 اسمح بالإشعارات واضغط الزر ليعمل الصوت:</div><div class="card" style="padding:10px"><button onclick="window.enableCustomerNotifs()">🔔 تفعيل الإشعارات والصوت</button></div>` : ''}
+    
     <div class="ahead-card"><div class="ahead-icon">👥</div><div class="ahead-info"><div class="title">المنتظرين قبلك</div><div class="count">${ahead === 0 ? 'أنت التالي!' : `${ahead} ${ahead === 1 ? 'شخص' : 'أشخاص'}`}</div></div></div>
+    
     <div class="card" style="text-align:center"><h2 style="color:var(--muted); font-size:1rem">رقم دورك</h2><div class="big-number">${me.number}</div></div>
+    
     <div class="card" style="text-align:center"><h2 style="color:var(--muted); font-size:1rem">يُخدم الآن</h2><div class="big-number" style="color:var(--muted)">${current || '—'}</div></div>
+    
+    <div class="card"><div class="stat-row">
+      <div class="stat"><div class="val">${ahead}</div><div class="lbl">أمامك</div></div>
+      <div class="stat"><div class="val">~${estMin}</div><div class="lbl">دقيقة تقديرية</div></div>
+      <div class="stat"><div class="val">${waiting.length}</div><div class="lbl">في الانتظار</div></div>
+    </div></div>
+    
     <div class="footer">أبقِ الصفحة مفتوحة</div>`;
 }
 
 async function enableCustomerNotifs() { 
   const ok = await requestNotifyPermission(); 
-  unlockAudio(); // Unlock audio context
+  unlockAudio(); 
   if (ok) { playBeep(); toast('✅ تم تفعيل الإشعارات والصوت'); } else toast('تم تفعيل الصوت فقط');
   refreshCustomer(); 
 }
